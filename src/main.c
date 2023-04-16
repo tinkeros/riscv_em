@@ -6,7 +6,7 @@
 
 /* for uart RX thread */
 #include <termios.h>
-#include <pthread.h>
+//#include <pthread.h>
 
 #include <riscv_helper.h>
 #include <riscv_example_soc.h>
@@ -64,8 +64,8 @@ void *uart_rx_thread(void* p)
 
 void start_uart_rx_thread(void *p)
 {
-    pthread_t uart_rx_th_id;
-    pthread_create(&uart_rx_th_id, NULL, uart_rx_thread, p);
+    //pthread_t uart_rx_th_id;
+    //pthread_create(&uart_rx_th_id, NULL, uart_rx_thread, p);
 }
 
 static void parse_options(int argc, 
@@ -152,13 +152,30 @@ static void parse_options(int argc,
     *dtb_file = arg_dtb_file;
 }
 
+static int64_t syscall0(unsigned int syscall_num)
+{
+        int64_t result;
+        __asm__ (".global _tos_syscall\ncallq _tos_syscall\n"
+                : "=a" (result)
+                : "0" (syscall_num)
+                : "r11"
+        );
+        return result;
+}
+
+static int8_t tos_get_kbd_fifo_char(void)
+{
+  return syscall0(2001);
+}
 
 int main(int argc, char *argv[])
 {
     char *fw_file = NULL;
     char *dtb_file = NULL;
+    char last_char;
     rv_uint_xlen success_pc = 0;
     uint64_t num_cycles = 0;
+    uint8_t tmp_char;
 
     parse_options(argc, argv, &fw_file, &dtb_file, &success_pc, &num_cycles);
 
@@ -171,7 +188,24 @@ int main(int argc, char *argv[])
 
     // rv_soc_dump_mem(&rv_soc);
 
-    printf("Now starting rvI core, loaded program file will now be started...\n\n\n");
+    printf("Now starting RISC-V core, loaded program file will now be started...\n\n\n");
 
-    rv_soc_run(&rv_soc, success_pc, num_cycles);
+    // Run this many cycles before even attempting to capture uart input
+    num_cycles=50000000;
+    printf("Running for ~%lu cycles (no input from UART will be processed yet)\n",num_cycles);
+    rv_soc_run(&rv_soc, success_pc, &num_cycles);
+
+    printf("Enabling UART input from TOS.\n",num_cycles);
+    while (1) {
+      fflush( stdout );
+
+      tmp_char=tos_get_kbd_fifo_char();
+      if (tmp_char) {
+        simple_uart_add_rx_char(&rv_soc.uart, tmp_char);
+        num_cycles+=10000;
+      }
+      num_cycles+=10000;
+      //fflush( stdout );
+      rv_soc_run(&rv_soc, success_pc, &num_cycles);
+    }
 }

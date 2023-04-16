@@ -154,7 +154,23 @@ void rv_soc_init(rv_soc_td *rv_soc, char *fw_file_name, char *dtb_file_name)
     DEBUG_PRINT("rv SOC initialized!\n");
 }
 
-void rv_soc_run(rv_soc_td *rv_soc, rv_uint_xlen success_pc, uint64_t num_cycles)
+static int64_t syscall0(unsigned int syscall_num)
+{
+        int64_t result;
+        __asm__ (".global _tos_syscall\ncallq _tos_syscall\n"
+                : "=a" (result)
+                : "0" (syscall_num)
+                : "r11"
+        );
+        return result;
+}
+
+static void tos_yield(void)
+{
+    (void)syscall0(2000); // Yield so TOS can do some work too
+}
+
+void rv_soc_run(rv_soc_td *rv_soc, rv_uint_xlen success_pc, uint64_t *num_cycles)
 {
     uint8_t mei = 0, msi = 0, mti = 0;
     uint8_t uart_irq_pending = 0;
@@ -163,6 +179,9 @@ void rv_soc_run(rv_soc_td *rv_soc, rv_uint_xlen success_pc, uint64_t num_cycles)
 
     while(1)
     {
+
+        tos_yield();
+
         rv_core_run(&rv_soc->rv_core0);
 
         /* update peripherals */
@@ -179,6 +198,8 @@ void rv_soc_run(rv_soc_td *rv_soc, rv_uint_xlen success_pc, uint64_t num_cycles)
         /* Feed clint and update internall states */    
         clint_update(&rv_soc->clint, &msi, &mti);
 
+        tos_yield();
+
         /* update CSRs for actual interrupt processing */
         rv_core_process_interrupts(&rv_soc->rv_core0, mei, mti, msi);
 
@@ -187,7 +208,10 @@ void rv_soc_run(rv_soc_td *rv_soc, rv_uint_xlen success_pc, uint64_t num_cycles)
         if(rv_soc->rv_core0.pc == success_pc)
             break;
 
-        if((num_cycles != 0) && (rv_soc->rv_core0.curr_cycle >= num_cycles))
+        if((*num_cycles != 0) && (rv_soc->rv_core0.curr_cycle >= *num_cycles))
+        {
+            *num_cycles = rv_soc->rv_core0.curr_cycle;
             break;
+        }
     }
 }
